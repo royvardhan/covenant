@@ -97,6 +97,8 @@ Selection rules:
 Selected checks run in parallel, each with a timeout. A check that exits
 non-zero is a BLOCK; one that exceeds its timeout is a TIMEOUT. Either makes
 `covenant check` exit 1. Results are written to `covenant-report.json`.
+On Unix a timed-out check is killed together with every process it started,
+and so are running checks when `covenant check` is interrupted (exit 130).
 Each check sees `COVENANT_PROMISE_ID` in its environment.
 
 ```

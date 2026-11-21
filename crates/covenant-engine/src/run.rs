@@ -1,6 +1,7 @@
 use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::{Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -13,6 +14,29 @@ use crate::report::{Outcome, PromiseResult};
 pub struct RunOptions {
     pub cwd: PathBuf,
     pub timeout: Duration,
+}
+
+/// Process groups of the checks that are running right now. On Unix every
+/// check leads its own group, so the group id is the child's pid.
+///
+/// A pid stays in here only while its child is unreaped (spawning, reaping and
+/// killing all happen under this lock), so a listed pid can never have been
+/// reused by an unrelated process.
+static RUNNING: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+
+fn running() -> MutexGuard<'static, Vec<u32>> {
+    RUNNING.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Kill every running check and everything it started, and stop any more from
+/// being spawned or reported. Only for use right before the process exits
+/// (e.g. from a Ctrl-C handler): runner threads block from here on.
+pub fn abort_running() {
+    let running = running();
+    for &pid in running.iter() {
+        kill_group(pid);
+    }
+    std::mem::forget(running);
 }
 
 pub fn run_all<F>(promises: &[&Promise], opts: &RunOptions, on_done: F) -> Vec<PromiseResult>
@@ -49,14 +73,21 @@ pub fn run_one(promise: &Promise, opts: &RunOptions) -> PromiseResult {
         output: String::new(),
     };
 
-    let mut child = match shell(&promise.check)
-        .current_dir(&opts.cwd)
-        .env("COVENANT_PROMISE_ID", &promise.id)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-    {
+    let spawned = {
+        let mut running = running();
+        let spawned = shell(&promise.check)
+            .current_dir(&opts.cwd)
+            .env("COVENANT_PROMISE_ID", &promise.id)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn();
+        if let Ok(child) = &spawned {
+            running.push(child.id());
+        }
+        spawned
+    };
+    let mut child = match spawned {
         Ok(c) => c,
         Err(e) => {
             result.output = format!("failed to spawn check: {e}");
@@ -102,9 +133,33 @@ fn shell(check: &str) -> Command {
     } else {
         let mut c = Command::new("sh");
         c.arg("-c").arg(check);
+        own_process_group(&mut c);
         c
     }
 }
+
+/// Put the check in its own process group so a timeout can kill everything it
+/// started, not just the shell. A surviving grandchild would keep the output
+/// pipes open and hold `run_one` until it exited on its own.
+#[cfg(unix)]
+fn own_process_group(cmd: &mut Command) {
+    use std::os::unix::process::CommandExt;
+    cmd.process_group(0);
+}
+
+#[cfg(not(unix))]
+fn own_process_group(_cmd: &mut Command) {}
+
+#[cfg(unix)]
+fn kill_group(pid: u32) {
+    // SAFETY: killpg has no memory-safety preconditions.
+    unsafe {
+        libc::killpg(pid as libc::pid_t, libc::SIGKILL);
+    }
+}
+
+#[cfg(not(unix))]
+fn kill_group(_pid: u32) {}
 
 fn drain<R: Read + Send + 'static>(reader: Option<R>) -> thread::JoinHandle<String> {
     thread::spawn(move || {
@@ -118,17 +173,27 @@ fn drain<R: Read + Send + 'static>(reader: Option<R>) -> thread::JoinHandle<Stri
 
 fn wait_with_timeout(child: &mut Child, timeout: Duration) -> Option<std::process::ExitStatus> {
     let deadline = Instant::now() + timeout;
+    let pid = child.id();
     loop {
-        match child.try_wait() {
-            Ok(Some(status)) => return Some(status),
-            Ok(None) if Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
+        {
+            let mut running = running();
+            let done = match child.try_wait() {
+                Ok(Some(status)) => Some(Some(status)),
+                Ok(None) if Instant::now() >= deadline => {
+                    kill_group(pid);
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    Some(None)
+                }
+                Ok(None) => None,
+                Err(_) => Some(child.wait().ok()),
+            };
+            if let Some(status) = done {
+                running.retain(|&p| p != pid);
+                return status;
             }
-            Ok(None) => thread::sleep(Duration::from_millis(25)),
-            Err(_) => return child.wait().ok(),
         }
+        thread::sleep(Duration::from_millis(25));
     }
 }
 
@@ -189,6 +254,16 @@ mod tests {
         let r = run_one(&promise("sleep 5", Some(1)), &opts());
         assert_eq!(r.outcome, Outcome::Timeout);
         assert!(r.duration_ms < 4000);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn timeout_kills_processes_the_shell_forked() {
+        // `; true` stops the shell from exec'ing `sleep` in place, so `sleep`
+        // runs as a grandchild on every platform.
+        let r = run_one(&promise("sleep 5; true", Some(1)), &opts());
+        assert_eq!(r.outcome, Outcome::Timeout);
+        assert!(r.duration_ms < 4000, "took {}ms", r.duration_ms);
     }
 
     #[test]

@@ -214,6 +214,77 @@ check = "sleep 10"
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn interrupt_kills_running_checks_and_exits_130() {
+    use std::time::{Duration, Instant};
+
+    let repo = Repo::new("interrupt");
+    repo.write(
+        "covenant.toml",
+        r#"
+[[promise]]
+id = "SLOW-1"
+statement = "slow"
+paths = ["**"]
+check = "sleep 30 & echo $! > sleep.pid; wait"
+"#,
+    );
+    repo.commit("init");
+
+    let mut child = Command::new(covenant())
+        .current_dir(&repo.dir)
+        .env("NO_COLOR", "1")
+        .args(["check", "--all"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+
+    let alive = |pid: &str| {
+        Command::new("kill")
+            .args(["-0", pid])
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap()
+            .success()
+    };
+    let wait_for = |what: &str, cond: &mut dyn FnMut() -> bool| {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !cond() {
+            assert!(Instant::now() < deadline, "timed out waiting for {what}");
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    };
+
+    let pid_file = repo.dir.join("sleep.pid");
+    let mut sleep_pid = String::new();
+    wait_for("the check to start", &mut || {
+        sleep_pid = fs::read_to_string(&pid_file)
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        !sleep_pid.is_empty()
+    });
+    assert!(alive(&sleep_pid));
+
+    // Signal covenant only, as a non-terminal sender would: the check must not
+    // rely on the terminal delivering the interrupt to it too.
+    let status = Command::new("kill")
+        .args(["-INT", &child.id().to_string()])
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let mut exit = None;
+    wait_for("covenant to exit", &mut || {
+        exit = child.try_wait().unwrap();
+        exit.is_some()
+    });
+    assert_eq!(exit.unwrap().code(), Some(130));
+    wait_for("the check's child to die", &mut || !alive(&sleep_pid));
+}
+
 #[test]
 fn checks_run_from_the_config_directory() {
     let repo = Repo::new("subdir");
