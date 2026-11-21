@@ -102,8 +102,37 @@ fn shell(check: &str) -> Command {
     } else {
         let mut c = Command::new("sh");
         c.arg("-c").arg(check);
+        own_process_group(&mut c);
         c
     }
+}
+
+/// Put the check in its own process group so a timeout can kill everything it
+/// started, not just the shell. A surviving grandchild would keep the output
+/// pipes open and hold `run_one` until it exited on its own.
+#[cfg(unix)]
+fn own_process_group(cmd: &mut Command) {
+    use std::os::unix::process::CommandExt;
+    cmd.process_group(0);
+}
+
+#[cfg(not(unix))]
+fn own_process_group(_cmd: &mut Command) {}
+
+#[cfg(unix)]
+fn kill_tree(child: &mut Child) {
+    // The child leads its own group (see `own_process_group`), so pgid == pid.
+    // SAFETY: killpg has no memory-safety preconditions. The child has not been
+    // reaped yet, so its pid cannot have been reused.
+    unsafe {
+        libc::killpg(child.id() as libc::pid_t, libc::SIGKILL);
+    }
+    let _ = child.kill();
+}
+
+#[cfg(not(unix))]
+fn kill_tree(child: &mut Child) {
+    let _ = child.kill();
 }
 
 fn drain<R: Read + Send + 'static>(reader: Option<R>) -> thread::JoinHandle<String> {
@@ -122,7 +151,7 @@ fn wait_with_timeout(child: &mut Child, timeout: Duration) -> Option<std::proces
         match child.try_wait() {
             Ok(Some(status)) => return Some(status),
             Ok(None) if Instant::now() >= deadline => {
-                let _ = child.kill();
+                kill_tree(child);
                 let _ = child.wait();
                 return None;
             }
@@ -189,6 +218,15 @@ mod tests {
         let r = run_one(&promise("sleep 5", Some(1)), &opts());
         assert_eq!(r.outcome, Outcome::Timeout);
         assert!(r.duration_ms < 4000);
+    }
+
+    #[test]
+    fn timeout_kills_processes_the_shell_forked() {
+        // `; true` stops the shell from exec'ing `sleep` in place, so `sleep`
+        // runs as a grandchild on every platform.
+        let r = run_one(&promise("sleep 5; true", Some(1)), &opts());
+        assert_eq!(r.outcome, Outcome::Timeout);
+        assert!(r.duration_ms < 4000, "took {}ms", r.duration_ms);
     }
 
     #[test]
