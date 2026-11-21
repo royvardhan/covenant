@@ -293,3 +293,67 @@ fn hook_install_writes_executable_pre_push() {
     assert_eq!(out.status.code(), Some(0));
     assert!(!Path::new(&hook).exists());
 }
+
+#[test]
+fn add_copies_a_builtin_pack_and_is_idempotent() {
+    let repo = Repo::new("add");
+    let out = repo.covenant(&["add", "billing"]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        stdout(&out).contains("added 5 promise(s) from `billing`"),
+        "{}",
+        stdout(&out)
+    );
+
+    let text = fs::read_to_string(repo.dir.join("covenant.toml")).unwrap();
+    assert!(text.contains("id = \"BILL-1\""));
+    assert!(text.contains("pack = \"billing\""));
+
+    let out = repo.covenant(&["add", "billing"]);
+    assert_eq!(out.status.code(), Some(0));
+    assert!(stdout(&out).contains("already in"));
+
+    let out = repo.covenant(&["add", "solver"]);
+    assert_eq!(out.status.code(), Some(0));
+    let out = repo.covenant(&["list"]);
+    let text = stdout(&out);
+    assert!(text.contains("BILL-5") && text.contains("SOLV-5"), "{text}");
+
+    let out = repo.covenant(&["add", "nope"]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("built-in packs: billing, solver"));
+}
+
+#[test]
+fn add_accepts_a_path_to_a_pack() {
+    let repo = Repo::new("addpath");
+    repo.write(
+        "mypack/pack.toml",
+        r#"
+name = "mine"
+description = "local"
+[[promise]]
+id = "MINE-1"
+statement = "it holds"
+paths = ["src/**"]
+check = "true"
+"#,
+    );
+    let out = repo.covenant(&["add", "mypack"]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = fs::read_to_string(repo.dir.join("covenant.toml")).unwrap();
+    assert!(
+        text.contains("MINE-1") && text.contains("pack = \"mine\""),
+        "{text}"
+    );
+}

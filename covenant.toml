@@ -15,3 +15,9 @@ id = "EX-1"
 statement = "The billing-service example keeps all three of its own promises"
 paths = ["examples/billing-service/**"]
 check = "cargo run -q -p covenant-cli -- --config examples/billing-service/covenant.toml check --all --report examples/billing-service/covenant-report.json"
+
+[[promise]]
+id = "PACK-1"
+statement = "Every shipped pack parses, has at least 5 promises, and every promise carries a statement, a why, paths, and a check template"
+paths = ["packs/**"]
+check = "cargo test -q -p covenant-engine --test packs"

@@ -1,3 +1,4 @@
+mod add;
 mod check;
 mod hook;
 mod ui;
@@ -38,6 +39,12 @@ enum Cmd {
         #[command(subcommand)]
         cmd: hook::Cmd,
     },
+    #[command(
+        about = "Copy a pack's promises into covenant.toml (built-in name or path to a pack.toml)"
+    )]
+    Add { pack: String },
+    #[command(about = "List the built-in packs")]
+    Packs,
 }
 
 fn main() -> ExitCode {
@@ -56,13 +63,15 @@ fn run(cli: Cli) -> Result<ExitCode> {
         Cmd::Check(args) => check::run(&cli.config, args),
         Cmd::List => list(&cli.config),
         Cmd::Hook { cmd } => hook::run(&cli.config, cmd),
+        Cmd::Add { pack } => add::run(&cli.config, &pack),
+        Cmd::Packs => add::list(),
     }
 }
 
 fn load_config(path: &Path) -> Result<Config> {
     if !path.exists() {
         bail!(
-            "{} not found. Create one with a [[promise]] table (see README)",
+            "{} not found. Run `covenant add billing` to start from a pack, or create one with a [[promise]] table",
             path.display()
         );
     }

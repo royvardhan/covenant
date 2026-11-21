@@ -1,0 +1,37 @@
+name = "solver"
+description = "Invariants for intent and order-flow solvers: users get at least what they asked for, orders settle at most once and only before expiry, fees stay within quotes, and nothing is submitted that would revert."
+
+[[promise]]
+id = "SOLV-1"
+statement = "A filled order never delivers less output than the user's minimum (limit price is respected)"
+why = "The minimum output is the only protection a user has against the solver. Delivering less is theft from the user's perspective, whatever the routing math says."
+paths = ["src/solver/**", "src/settlement/**", "contracts/**"]
+check = "cargo test --test solv_1 # TODO: a test that fills random orders and asserts received_out >= min_out for each"
+
+[[promise]]
+id = "SOLV-2"
+statement = "An order is settled at most once; a second fill of the same order id is rejected"
+why = "Replaying a fill drains the user twice. The uniqueness check must hold across batches, restarts, and reorgs, not just within one solution."
+paths = ["src/solver/**", "src/settlement/**", "contracts/**"]
+check = "cargo test --test solv_2 # TODO: a test that submits the same order in two solutions and asserts the second is rejected"
+
+[[promise]]
+id = "SOLV-3"
+statement = "An order is never filled after its deadline"
+why = "Users price their orders for a time window. Filling a stale order executes at a price the user never agreed to, often during the exact volatility they were avoiding."
+paths = ["src/solver/**", "src/settlement/**", "contracts/**"]
+check = "cargo test --test solv_3 # TODO: a test that advances time past deadline and asserts the fill is rejected"
+
+[[promise]]
+id = "SOLV-4"
+statement = "The fee taken from an order never exceeds the fee quoted to the user"
+why = "A quote is a promise. Fees that drift above the quote, even by gas estimation error, look like skimming and are impossible to explain after the fact."
+paths = ["src/solver/fee*", "src/quote/**", "src/settlement/**"]
+check = "cargo test --test solv_4 # TODO: a test that quotes then settles random orders and asserts fee_taken <= fee_quoted"
+
+[[promise]]
+id = "SOLV-5"
+statement = "A solution is only submitted on-chain if its simulation succeeds against the current state"
+why = "A reverting settlement burns gas and the auction slot, and a solver that submits unsimulated solutions eventually submits one that settles at a stale price."
+paths = ["src/solver/submit*", "src/simulation/**", "src/settlement/**"]
+check = "cargo test --test solv_5 # TODO: a test that makes simulation fail and asserts submit() is never called"

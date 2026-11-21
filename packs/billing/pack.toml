@@ -1,0 +1,37 @@
+name = "billing"
+description = "Invariants every metered or subscription billing system should keep: limits, non-negative usage, idempotent charges, invoice arithmetic, and no charges after cancellation."
+
+[[promise]]
+id = "BILL-1"
+statement = "An org is never billed more than its limit in a billing period"
+why = "Over-limit charges are the billing bug customers notice first and forgive last. The limit is a contract; the ledger must enforce it on the cumulative total, not per charge."
+paths = ["src/billing/**", "src/ledger/**"]
+check = "cargo test --test bill_1 # TODO: a test that drives random charges and asserts usage <= limit after each"
+
+[[promise]]
+id = "BILL-2"
+statement = "An org's recorded usage is never negative"
+why = "Negative usage lets a refund or correction turn into free credit, and it breaks every downstream report that assumes usage >= 0."
+paths = ["src/billing/**", "src/ledger/**"]
+check = "cargo test --test bill_2 # TODO: a test that interleaves charges and refunds and asserts usage >= 0 after each"
+
+[[promise]]
+id = "BILL-3"
+statement = "Retrying a charge with the same idempotency key charges the org exactly once"
+why = "Clients retry on timeouts. Without idempotency a flaky network double-bills, and the second charge is indistinguishable from a legitimate one."
+paths = ["src/billing/**", "src/api/charge*"]
+check = "cargo test --test bill_3 # TODO: a test that submits the same key twice and asserts usage moved once"
+
+[[promise]]
+id = "BILL-4"
+statement = "An invoice total always equals the sum of its line items in integer minor units"
+why = "Rounding each line separately and then summing, or summing floats, drifts by cents. Finance reconciles to the cent and a one-cent drift is a failed audit."
+paths = ["src/billing/invoice*", "src/invoices/**"]
+check = "cargo test --test bill_4 # TODO: a test that builds invoices from random line items and asserts total == sum(lines)"
+
+[[promise]]
+id = "BILL-5"
+statement = "A cancelled subscription is never charged for a period that starts after its cancellation date"
+why = "Charging after cancellation is the fastest route to chargebacks and regulator complaints. Proration at the boundary is where the off-by-one hides."
+paths = ["src/billing/subscription*", "src/subscriptions/**"]
+check = "cargo test --test bill_5 # TODO: a test that cancels mid-period and asserts no charge for the next period"
