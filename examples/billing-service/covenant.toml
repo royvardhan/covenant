@@ -1,0 +1,20 @@
+[[promise]]
+id = "BILL-1"
+statement = "An org is never billed more than its limit in a billing period"
+paths = ["src/**"]
+check = "cargo test -q -p billing-service --test bill_1"
+pack = "billing"
+
+[[promise]]
+id = "BILL-2"
+statement = "An org's usage is never negative"
+paths = ["src/**"]
+check = "cargo test -q -p billing-service --test bill_2"
+pack = "billing"
+
+[[promise]]
+id = "BILL-3"
+statement = "Retrying a charge with the same idempotency key charges the org exactly once"
+paths = ["src/**"]
+check = "cargo test -q -p billing-service --test bill_3"
+pack = "billing"

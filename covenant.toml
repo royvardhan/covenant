@@ -9,3 +9,9 @@ id = "COV-2"
 statement = "A check that exits non-zero or times out always produces a BLOCK and a non-zero exit from `covenant check`"
 paths = ["crates/**"]
 check = "cargo test -q -p covenant-cli"
+
+[[promise]]
+id = "EX-1"
+statement = "The billing-service example keeps all three of its own promises"
+paths = ["examples/billing-service/**"]
+check = "cargo run -q -p covenant-cli -- --config examples/billing-service/covenant.toml check --all --report examples/billing-service/covenant-report.json"

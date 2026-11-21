@@ -1,0 +1,10 @@
+[package]
+name = "billing-service"
+description = "Tiny billing ledger used to demonstrate covenant promises"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+path = "src/lib.rs"
