@@ -14,3 +14,6 @@ path = "src/main.rs"
 covenant-engine = { path = "../covenant-engine", version = "0.1.0" }
 clap.workspace = true
 anyhow.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
