@@ -75,7 +75,9 @@ pub fn run_one(promise: &Promise, opts: &RunOptions) -> PromiseResult {
 
     let spawned = {
         let mut running = running();
-        let spawned = shell(&promise.check)
+        let mut cmd = shell_command(&promise.check);
+        own_process_group(&mut cmd);
+        let spawned = cmd
             .current_dir(&opts.cwd)
             .env("COVENANT_PROMISE_ID", &promise.id)
             .stdin(Stdio::null())
@@ -125,17 +127,16 @@ pub fn run_one(promise: &Promise, opts: &RunOptions) -> PromiseResult {
     result
 }
 
-fn shell(check: &str) -> Command {
-    if cfg!(windows) {
-        let mut c = Command::new("cmd");
-        c.arg("/C").arg(check);
-        c
+/// `line` as the platform's shell would run it.
+pub fn shell_command(line: &str) -> Command {
+    let (shell, flag) = if cfg!(windows) {
+        ("cmd", "/C")
     } else {
-        let mut c = Command::new("sh");
-        c.arg("-c").arg(check);
-        own_process_group(&mut c);
-        c
-    }
+        ("sh", "-c")
+    };
+    let mut c = Command::new(shell);
+    c.arg(flag).arg(line);
+    c
 }
 
 /// Put the check in its own process group so a timeout can kill everything it

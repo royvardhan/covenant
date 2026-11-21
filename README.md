@@ -1,11 +1,18 @@
 # Covenant
 
-An open registry of invariants ("promises") plus a small engine that runs the
-right checks on every push and blocks the push if any promise breaks.
+A verification layer for the things your software must never get wrong. You
+state a promise in plain English; Covenant gets a check written for it, tests
+that the check can actually fail, and then runs it on every push.
 
 A promise is a sentence about your system that must stay true, paired with a
-command that proves it. Covenant watches which files a change touches, runs
-only the promises those files could break, and refuses the push on failure.
+command that proves it. Covenant does three things with it:
+
+- `covenant prove` hands the sentence to a coding agent, which writes the test.
+- `covenant mutate` breaks the protected code on purpose and rejects a check
+  that does not notice.
+- `covenant check` watches which files a change touches, runs only the
+  promises those files could break, and refuses the push on failure.
+
 It is language-agnostic: a check is any command that exits 0 (kept) or
 non-zero (broken).
 
@@ -37,7 +44,7 @@ Covenant makes them explicit and cheap to enforce:
   runs nothing; a change to `src/billing/` runs the billing promises; a
   lockfile change runs everything.
 - **Shared.** Promises come in packs. The billing pack is the same for every
-  billing system; you import it and wire each check to your code.
+  billing system; you import it and have each check written for your code.
 
 ## Quickstart (2 minutes)
 
@@ -46,13 +53,14 @@ cargo install --path crates/covenant-cli   # from a clone of this repo
 
 cd your-repo
 covenant add billing          # copies 5 billing promises into covenant.toml
-$EDITOR covenant.toml         # point each `check` at a real command
+$EDITOR covenant.toml         # point each promise's `paths` at your code
+covenant prove BILL-1 --agent '<your coding agent>'   # writes and tests the check; repeat per promise
 covenant check --all          # run every promise once
 covenant hook install         # every `git push` now runs the affected promises
 ```
 
-Or skip the editing and have an agent write each check:
-`covenant prove BILL-1 --agent '<your coding agent>'` (see below).
+No agent? Write each `check` by hand instead, then run `covenant mutate <id>`
+to see whether it can fail.
 
 That is it. From now on `git push` runs the promises whose `paths` overlap the
 pushed diff and blocks on any failure. Run `covenant check --all` on main and
@@ -193,8 +201,10 @@ How it works, and where it is rough:
 ## Pack format
 
 A pack is a directory with a `pack.toml`. It is the same promise table with a
-`why` for each promise and a check *template* the importer adapts. Packs never
-set `pack =`; `covenant add` does that.
+`why` for each promise and a placeholder `check`: `false`, so the promise
+fails until it has a real check, followed by a `# TODO` hint that
+`covenant prove` passes to the agent. Packs never set `pack =`;
+`covenant add` does that.
 
 ```toml
 name = "billing"
@@ -205,7 +215,7 @@ id = "BILL-3"
 statement = "Retrying a charge with the same idempotency key charges the org exactly once"
 why = "Clients retry on timeouts. Without idempotency a flaky network double-bills."
 paths = ["src/billing/**", "src/api/charge*"]
-check = "cargo test --test bill_3 # TODO: a test that submits the same key twice"
+check = "false # TODO: a test that submits the same key twice"
 ```
 
 Built-in packs ship inside the binary and are listed by `covenant packs`:
@@ -221,8 +231,8 @@ Built-in packs ship inside the binary and are listed by `covenant packs`:
    at least five promises. Each needs an `id` unique across all packs, a
    `statement` a non-engineer could agree with, a `why` that says what goes
    wrong when it breaks, `paths` that are plausible defaults for most repos,
-   and a `check` template ending in a `# TODO` comment that says what the
-   real check must prove.
+   and `check = "false # TODO: ..."` where the hint says what the real check
+   must prove.
 2. Register it in `crates/covenant-cli/src/add.rs` so `covenant add <name>` works.
 3. Run `cargo test`. The `packs` test validates every pack, and the repo's own
    `covenant.toml` runs it on any change under `packs/`.

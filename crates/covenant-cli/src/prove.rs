@@ -3,12 +3,11 @@ use std::fs;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::Write;
 use std::path::Path;
-use std::process::{Command, ExitCode, Stdio};
-use std::time::Duration;
+use std::process::{ExitCode, Stdio};
 
 use anyhow::{Context, Result, bail};
 use clap::Args as ClapArgs;
-use covenant_engine::{DEFAULT_TIMEOUT_SECS, Promise, RunOptions, git, prove, run, select};
+use covenant_engine::{Promise, git, prove, run, select};
 
 use crate::load_config;
 use crate::mutate::{self as mutants, MutateArgs};
@@ -48,15 +47,7 @@ type Snapshot = BTreeMap<String, (bool, Option<u64>)>;
 
 pub fn run(config_path: &Path, args: Args) -> Result<ExitCode> {
     let mut cfg = load_config(config_path)?;
-    let Some(index) = cfg.promises.iter().position(|p| p.id == args.id) else {
-        let ids: Vec<&str> = cfg.promises.iter().map(|p| p.id.as_str()).collect();
-        bail!(
-            "no promise `{}` in {}; promises: {}",
-            args.id,
-            config_path.display(),
-            ids.join(", ")
-        );
-    };
+    let index = crate::promise_index(&cfg, &args.id, config_path)?;
     let promise = cfg.promises[index].clone();
     let cwd = crate::config_dir(config_path);
 
@@ -168,15 +159,7 @@ pub fn run(config_path: &Path, args: Args) -> Result<ExitCode> {
         check: check.clone(),
         ..promise.clone()
     };
-    let timeout = args
-        .timeout
-        .or(promise.timeout)
-        .or(cfg.timeout)
-        .unwrap_or(DEFAULT_TIMEOUT_SECS);
-    let opts = RunOptions {
-        cwd: cwd.clone(),
-        timeout: Duration::from_secs(timeout),
-    };
+    let opts = crate::run_options(config_path, &cfg, args.timeout);
     crate::install_interrupt_handler()?;
     let result = run::run_one(&candidate, &opts);
     ui::verdict(&result, false);
@@ -219,16 +202,9 @@ fn run_agent(
     out_name: &str,
     brief: &str,
 ) -> Result<std::process::ExitStatus> {
-    let mut cmd = if cfg!(windows) {
-        let mut c = Command::new("cmd");
-        c.arg("/C").arg(agent);
-        c
-    } else {
-        let mut c = Command::new("sh");
-        c.arg("-c").arg(agent);
-        c
-    };
-    let mut child = cmd
+    // Unlike a check, the agent stays in our process group: it is interactive
+    // work the user is watching, and Ctrl-C should reach it directly.
+    let mut child = run::shell_command(agent)
         .current_dir(cwd)
         .env("COVENANT_PROMISE_ID", &promise.id)
         .env("COVENANT_PROVE_OUT", out_name)

@@ -1,12 +1,9 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use clap::Args as ClapArgs;
-use covenant_engine::{
-    DEFAULT_TIMEOUT_SECS, Outcome, Reason, Report, RunOptions, git, run, select,
-};
+use covenant_engine::{Outcome, Reason, Report, git, run, select};
 
 use crate::load_config;
 use crate::ui;
@@ -36,11 +33,7 @@ pub struct Args {
 
 pub fn run(config_path: &Path, args: Args) -> Result<ExitCode> {
     let cfg = load_config(config_path)?;
-    let cwd = config_path
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."));
+    let cwd = crate::config_dir(config_path);
 
     let (selection, base, head, changed) = if args.all {
         (select::select_all(&cfg.promises), None, None, Vec::new())
@@ -73,11 +66,7 @@ pub fn run(config_path: &Path, args: Args) -> Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
 
-    let timeout = args.timeout.or(cfg.timeout).unwrap_or(DEFAULT_TIMEOUT_SECS);
-    let opts = RunOptions {
-        cwd: cwd.clone(),
-        timeout: Duration::from_secs(timeout),
-    };
+    let opts = crate::run_options(config_path, &cfg, args.timeout);
     let quiet = args.quiet;
     crate::install_interrupt_handler()?;
     let results = run::run_all(&selection.promises, &opts, |r| ui::verdict(r, quiet));

@@ -39,7 +39,8 @@ pub fn run(config_path: &Path, name: &str) -> Result<ExitCode> {
     }
     println!();
     println!(
-        "next: open {} and replace each `check` with a command that verifies the promise in your code",
+        "next: point each promise's `paths` at your code in {}, then run `covenant prove <id>` \
+         to have its check written, or write the `check` command yourself",
         config_path.display()
     );
     Ok(ExitCode::SUCCESS)

@@ -2,12 +2,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Mutex;
-use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use clap::Args as ClapArgs;
 use covenant_engine::mutate::{self, Site};
-use covenant_engine::{DEFAULT_TIMEOUT_SECS, Outcome, Promise, RunOptions, git, run, select};
+use covenant_engine::{Outcome, Promise, RunOptions, git, run, select};
 
 use crate::load_config;
 use crate::ui;
@@ -94,28 +93,11 @@ impl Drop for Mutant {
 
 pub fn run(config_path: &Path, args: Args) -> Result<ExitCode> {
     let cfg = load_config(config_path)?;
-    let Some(promise) = cfg.get(&args.id).cloned() else {
-        let ids: Vec<&str> = cfg.promises.iter().map(|p| p.id.as_str()).collect();
-        bail!(
-            "no promise `{}` in {}; promises: {}",
-            args.id,
-            config_path.display(),
-            ids.join(", ")
-        );
-    };
-    let cwd = crate::config_dir(config_path);
-    let timeout = args
-        .timeout
-        .or(promise.timeout)
-        .or(cfg.timeout)
-        .unwrap_or(DEFAULT_TIMEOUT_SECS);
-    let run_opts = RunOptions {
-        cwd: cwd.clone(),
-        timeout: Duration::from_secs(timeout),
-    };
+    let promise = cfg.promises[crate::promise_index(&cfg, &args.id, config_path)?].clone();
+    let run_opts = crate::run_options(config_path, &cfg, args.timeout);
     let build = args.opts.build.clone().or(cfg.build.clone());
 
-    let sites = candidate_sites(&cwd, &promise)?;
+    let sites = candidate_sites(&run_opts.cwd, &promise)?;
     if sites.is_empty() {
         bail!("{}", no_sites_message(&promise));
     }

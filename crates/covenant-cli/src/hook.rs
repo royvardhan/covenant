@@ -44,11 +44,7 @@ pub enum Cmd {
 }
 
 pub fn run(config_path: &Path, cmd: Cmd) -> Result<ExitCode> {
-    let dir = config_path
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
-    let hook = hook_path(dir)?;
+    let hook = hook_path(&crate::config_dir(config_path))?;
     match cmd {
         Cmd::Install { force } => install(&hook, force),
         Cmd::Uninstall => uninstall(&hook),

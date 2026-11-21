@@ -7,10 +7,11 @@ mod ui;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
-use covenant_engine::Config;
+use covenant_engine::{Config, DEFAULT_TIMEOUT_SECS, RunOptions};
 
 #[derive(Parser)]
 #[command(
@@ -83,6 +84,32 @@ fn config_dir(config_path: &Path) -> PathBuf {
         .filter(|p| !p.as_os_str().is_empty())
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// Where and for how long checks run: the command line's timeout, else the
+/// config's, else the default. A promise's own `timeout` still takes precedence
+/// over all of these; the engine applies it per check.
+fn run_options(config_path: &Path, cfg: &Config, flag: Option<u64>) -> RunOptions {
+    let secs = flag.or(cfg.timeout).unwrap_or(DEFAULT_TIMEOUT_SECS);
+    RunOptions {
+        cwd: config_dir(config_path),
+        timeout: Duration::from_secs(secs),
+    }
+}
+
+/// Position of promise `id` in the config, or an error listing what exists.
+fn promise_index(cfg: &Config, id: &str, config_path: &Path) -> Result<usize> {
+    cfg.promises
+        .iter()
+        .position(|p| p.id == id)
+        .with_context(|| {
+            let ids: Vec<&str> = cfg.promises.iter().map(|p| p.id.as_str()).collect();
+            format!(
+                "no promise `{id}` in {}; promises: {}",
+                config_path.display(),
+                ids.join(", ")
+            )
+        })
 }
 
 /// Checks run in their own process groups, so the terminal's Ctrl-C does not
