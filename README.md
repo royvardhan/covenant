@@ -77,6 +77,7 @@ to it, and checks run from its directory.
 ```toml
 timeout = 600                       # optional, seconds per check (default 600)
 agent = "claude -p --allowedTools Read Write Edit Glob Grep Bash"   # optional, used by `covenant prove`
+build = "cargo check -q"            # optional, used by `covenant mutate` to discard mutants that do not compile
 
 [[promise]]
 id = "BILL-1"
@@ -109,7 +110,8 @@ Each check sees `COVENANT_PROMISE_ID` in its environment.
 covenant check [--base <ref>] [--head <ref>] [--all] [--timeout <secs>] [--report <path>] [--quiet]
 covenant list
 covenant add <pack-name | path/to/pack.toml>
-covenant prove <id> [--agent <command>] [--print-prompt] [--allow-source-edits] [--timeout <secs>]
+covenant prove <id> [--agent <command>] [--print-prompt] [--allow-source-edits] [--no-mutate] [--timeout <secs>]
+covenant mutate <id> [--mutants <n>] [--seed <n>] [--build <command>] [--timeout <secs>]
 covenant packs
 covenant hook install [--force] | uninstall
 ```
@@ -130,8 +132,11 @@ covenant prove BILL-1 --agent 'claude -p --allowedTools Read Write Edit Glob Gre
    and pipes it to the agent command's stdin. `--print-prompt` shows it.
 2. The agent reads the repo, writes a test in the repo's own framework, and
    reports the command that runs it.
-3. Covenant lists every file the agent touched, runs the command, and only if
-   it passes writes it into `covenant.toml` as the promise's `check`.
+3. Covenant lists every file the agent touched and runs the command, which
+   must pass.
+4. Covenant then breaks the protected code (see the next section) and requires
+   the command to fail on at least one break. Only then is it written into
+   `covenant.toml` as the promise's `check`. `--no-mutate` skips this step.
 
 Covenant refuses the result if the agent edited existing files under the
 promise's `paths`, because a check must not pass by changing the code it
@@ -143,9 +148,47 @@ run tests in the working directory. Set it with `--agent`, `COVENANT_AGENT`, or
 `agent = "..."` at the top of `covenant.toml`. It also sees
 `COVENANT_PROMISE_ID` and `COVENANT_PROVE_OUT` in its environment.
 
-A check that passes once has not been shown to fail when the promise breaks.
-The brief asks the agent to try that, but Covenant does not verify it yet
-(see the roadmap).
+## Testing a check: can it fail?
+
+A check that passes proves little until it has been seen to fail. `covenant
+mutate <id>` breaks the code a promise protects, one token at a time, and
+reruns the check on each broken version ("mutant"):
+
+```
+$ covenant mutate BILL-1
+covenant: breaking the code 10 way(s) to see whether BILL-1's check notices (seed 1, 23 possible)
+
+CAUGHT   src/lib.rs:41  `>` -> `>=`
+CAUGHT   src/lib.rs:44  `+=` -> `-=`
+MISSED   src/lib.rs:63  `==` -> `!=`
+...
+covenant: BILL-1's check caught 8 of 10 mutant(s)
+```
+
+It exits 1 when the check caught nothing, which means the check would not
+notice the promise breaking. It works on any promise, hand-written or
+generated, and `covenant prove` runs it before accepting an agent's check.
+
+How it works, and where it is rough:
+
+- Mutants are swaps that keep code well-formed in most languages: `>` and
+  `>=`, `<` and `<=`, `==` and `!=`, `&&` and `||`, `+` and `-`, `true` and
+  `false`. They are found by scanning text, not parsing, so it works on any
+  language but sometimes picks a token inside a multi-line string.
+- Only tracked files matching the promise's `paths` are mutated. Tests,
+  manifests and prose are left out, and so is everything after `#[cfg(test)]`
+  in a Rust file.
+- Files are mutated in place, one at a time, and restored after each run and
+  on Ctrl-C. If Covenant is killed outright, `git diff` shows the one swapped
+  token.
+- Set `build` to a command that exits 0 when the code compiles. Mutants that
+  fail it are discarded. Without it, a mutant that does not compile fails the
+  check for the wrong reason and still counts as caught.
+- The mutants are picked by `--seed`, so a run is repeatable. A timed-out
+  mutant is not counted either way.
+- One caught mutant shows the check can fail. It does not show the check
+  covers the whole promise: a missed mutant is a hole only if that line matters
+  to the promise, and broad `paths` include code it does not cover.
 
 ## Pack format
 
@@ -191,7 +234,7 @@ Built-in packs ship inside the binary and are listed by `covenant packs`:
 
 ```
 crates/covenant-engine/   load promises, select by diff, run checks, write the report
-crates/covenant-cli/      covenant check | list | add | packs | prove | hook
+crates/covenant-cli/      covenant check | list | add | packs | prove | mutate | hook
 packs/billing/            generic billing promises
 packs/solver/             intent / order-flow solver promises
 examples/billing-service/ tiny ledger with 3 wired promises; demo/over-limit-bug shows a BLOCK
@@ -206,9 +249,11 @@ produces and enforces the proof. Today a human writes every check.
 - v0.2: statement to check. `covenant prove <id>` has an AI agent read the repo
   and write the test that proves a promise; a human reviews it once. The first
   version is in: one promise at a time, through an external agent command
-- v0.3: proof the check is real. Break the code on purpose (seeded fault
-  injection) and require the check to fail, so a generated check cannot pass
-  vacuously
+- v0.3: proof the check is real. Break the code on purpose and require the
+  check to fail, so a generated check cannot pass vacuously. The first version
+  is in: `covenant mutate`, also run by `covenant prove`. Still to do: mutants
+  aimed at the promise itself instead of generic operator swaps, and a record
+  in the report of which promises have been tested this way
 - v0.4: diff to promise. On each change the agent flags the promises it
   endangers and proposes new ones, replacing hand-written `paths` globs
   (dependency-graph selection lands here as the non-AI fallback)

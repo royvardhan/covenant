@@ -1,3 +1,5 @@
+build = "cargo check -q --workspace"
+
 [[promise]]
 id = "COV-1"
 statement = "Selection runs exactly the promises whose paths match the changed files, and every promise when a lockfile changes"

@@ -79,13 +79,7 @@ pub fn run(config_path: &Path, args: Args) -> Result<ExitCode> {
         timeout: Duration::from_secs(timeout),
     };
     let quiet = args.quiet;
-    // Checks run in their own process groups, so the terminal's Ctrl-C does not
-    // reach them. Take them down with us.
-    ctrlc::set_handler(|| {
-        run::abort_running();
-        std::process::exit(130);
-    })
-    .context("could not install the interrupt handler")?;
+    crate::install_interrupt_handler()?;
     let results = run::run_all(&selection.promises, &opts, |r| ui::verdict(r, quiet));
 
     let report = Report {

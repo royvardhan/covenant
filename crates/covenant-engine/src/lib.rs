@@ -1,6 +1,7 @@
 pub mod config;
 pub mod error;
 pub mod git;
+pub mod mutate;
 pub mod pack;
 pub mod prove;
 pub mod report;

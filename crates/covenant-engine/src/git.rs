@@ -82,6 +82,16 @@ pub fn dirty_files(dir: &Path) -> Result<Vec<Dirty>, Error> {
         .collect())
 }
 
+/// Files under `dir` that git tracks, relative to `dir`.
+pub fn tracked_files(dir: &Path) -> Result<Vec<String>, Error> {
+    let out = git(dir, &["ls-files", "-z", "--", "."])?;
+    Ok(out
+        .split('\0')
+        .filter(|f| !f.is_empty())
+        .map(str::to_string)
+        .collect())
+}
+
 pub fn toplevel(dir: &Path) -> Result<String, Error> {
     git(dir, &["rev-parse", "--show-toplevel"]).map(|s| s.trim().to_string())
 }

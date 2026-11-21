@@ -26,6 +26,10 @@ pub struct Config {
     /// Command `covenant prove` hands a promise to; it reads the brief on stdin.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
+    /// Command that exits 0 when the code still builds. `covenant mutate` uses
+    /// it to discard mutants that do not compile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build: Option<String>,
     #[serde(default, rename = "promise")]
     pub promises: Vec<Promise>,
 }
@@ -144,6 +148,7 @@ mod tests {
         let c = Config {
             timeout: Some(30),
             agent: Some("my-agent --run".into()),
+            build: Some("cargo check -q".into()),
             promises: vec![Promise {
                 id: "A-1".into(),
                 statement: "s".into(),

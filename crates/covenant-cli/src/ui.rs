@@ -81,6 +81,16 @@ pub fn verdict(r: &PromiseResult, quiet: bool) {
     println!();
 }
 
+/// One mutant's result. `good` colours the tag: caught, missed, or neither.
+pub fn mutant(tag: &str, good: Option<bool>, label: &str) {
+    let tag = match good {
+        Some(true) => paint("1;32", tag),
+        Some(false) => paint("1;31", tag),
+        None => paint("1;33", tag),
+    };
+    println!("{tag}  {label}");
+}
+
 fn tail(s: &str, n: usize) -> Vec<&str> {
     let lines: Vec<&str> = s.lines().collect();
     let skip = lines.len().saturating_sub(n);

@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, ExitCode, Stdio};
 use std::time::Duration;
 
@@ -11,6 +11,7 @@ use clap::Args as ClapArgs;
 use covenant_engine::{DEFAULT_TIMEOUT_SECS, Promise, RunOptions, git, prove, run, select};
 
 use crate::load_config;
+use crate::mutate::{self as mutants, MutateArgs};
 use crate::ui;
 
 #[derive(ClapArgs)]
@@ -31,6 +32,13 @@ pub struct Args {
     allow_source_edits: bool,
     #[arg(long, help = "Timeout in seconds for running the new check")]
     timeout: Option<u64>,
+    #[arg(
+        long,
+        help = "Record the check without first breaking the code to see whether it notices"
+    )]
+    no_mutate: bool,
+    #[command(flatten)]
+    mutate: MutateArgs,
 }
 
 /// Content fingerprint of every file that differs from HEAD, keyed by path.
@@ -50,11 +58,7 @@ pub fn run(config_path: &Path, args: Args) -> Result<ExitCode> {
         );
     };
     let promise = cfg.promises[index].clone();
-    let cwd = config_path
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."));
+    let cwd = crate::config_dir(config_path);
 
     let out_name = format!(".covenant-prove-{}.check", file_safe(&promise.id));
     let brief = prove::prompt(&promise, &out_name);
@@ -76,6 +80,15 @@ pub fn run(config_path: &Path, args: Args) -> Result<ExitCode> {
              `agent = \"<command>\"` at the top of covenant.toml. The command gets the brief \
              on stdin and must be able to edit files and run tests in this repository",
         )?;
+
+    // Find out now, not after the agent has spent its time, whether there is
+    // anything to break when it comes to testing the check.
+    if !args.no_mutate && mutants::candidate_sites(&cwd, &promise)?.is_empty() {
+        bail!(
+            "{}. Or pass --no-mutate to record a check without that test",
+            mutants::no_sites_message(&promise)
+        );
+    }
 
     let config_name = config_path
         .file_name()
@@ -164,11 +177,7 @@ pub fn run(config_path: &Path, args: Args) -> Result<ExitCode> {
         cwd: cwd.clone(),
         timeout: Duration::from_secs(timeout),
     };
-    ctrlc::set_handler(|| {
-        run::abort_running();
-        std::process::exit(130);
-    })
-    .context("could not install the interrupt handler")?;
+    crate::install_interrupt_handler()?;
     let result = run::run_one(&candidate, &opts);
     ui::verdict(&result, false);
     if !result.outcome.is_pass() {
@@ -179,18 +188,27 @@ pub fn run(config_path: &Path, args: Args) -> Result<ExitCode> {
         return Ok(ExitCode::from(1));
     }
 
+    println!();
+    if !args.no_mutate {
+        let sites = mutants::candidate_sites(&cwd, &candidate)?;
+        let build = args.mutate.build.clone().or(cfg.build.clone());
+        let summary =
+            mutants::run_mutants(&candidate, sites, &args.mutate, build.as_deref(), &opts)?;
+        if !mutants::report(&candidate, &summary) {
+            println!("          covenant.toml not updated");
+            return Ok(ExitCode::from(1));
+        }
+        println!();
+    }
+
     cfg.promises[index].check = check.clone();
     cfg.save(config_path)?;
-    println!();
     println!(
         "covenant: {} is now checked by `{check}` ({} updated)",
         promise.id,
         config_path.display()
     );
-    println!(
-        "          Passing once does not prove the test can fail. Read the test and the summary \
-         above, then commit."
-    );
+    println!("          Read the test and the agent's summary above, then commit.");
     Ok(ExitCode::SUCCESS)
 }
 

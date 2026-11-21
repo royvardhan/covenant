@@ -55,7 +55,9 @@ What to do
    deterministic and fast enough to run on every push.
 3. Run the test and confirm it passes against the current code. Then confirm it
    can fail: temporarily break the behaviour, watch the test catch it, and
-   restore the code exactly. A test that cannot fail proves nothing.
+   restore the code exactly. A test that cannot fail proves nothing, and
+   Covenant will check this itself afterwards: it swaps single operators in
+   the protected code and rejects a check that notices none of them.
 4. Write the shell command that runs just this test, as it would be typed from
    the current directory, to the file `{out_file}`. One line, nothing else.
 

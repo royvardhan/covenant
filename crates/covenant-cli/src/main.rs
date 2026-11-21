@@ -1,6 +1,7 @@
 mod add;
 mod check;
 mod hook;
+mod mutate;
 mod prove;
 mod ui;
 
@@ -48,6 +49,8 @@ enum Cmd {
     Packs,
     #[command(about = "Have an AI agent write the check for a promise, then verify it")]
     Prove(prove::Args),
+    #[command(about = "Break the code a promise protects and see whether its check notices")]
+    Mutate(mutate::Args),
 }
 
 fn main() -> ExitCode {
@@ -69,7 +72,28 @@ fn run(cli: Cli) -> Result<ExitCode> {
         Cmd::Add { pack } => add::run(&cli.config, &pack),
         Cmd::Packs => add::list(),
         Cmd::Prove(args) => prove::run(&cli.config, args),
+        Cmd::Mutate(args) => mutate::run(&cli.config, args),
     }
+}
+
+/// The directory checks run from: where the config file lives.
+fn config_dir(config_path: &Path) -> PathBuf {
+    config_path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// Checks run in their own process groups, so the terminal's Ctrl-C does not
+/// reach them. Take them down with us, and never leave a mutant on disk.
+fn install_interrupt_handler() -> Result<()> {
+    ctrlc::set_handler(|| {
+        covenant_engine::run::abort_running();
+        mutate::restore_and_freeze();
+        std::process::exit(130);
+    })
+    .context("could not install the interrupt handler")
 }
 
 fn load_config(path: &Path) -> Result<Config> {

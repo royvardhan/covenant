@@ -438,9 +438,18 @@ paths = ["src/billing/**"]
 check = "false # TODO: drive random charges"
 "#;
 
+// usage, amount, limit -> "ok" or "rejected". One mutation site: the `+`.
+const CHARGE_SH: &str = r#"total=$(( $1 + $2 ))
+if [ "$total" -gt "$3" ]; then echo rejected; else echo ok; fi
+"#;
+
+// Fails when 5 + 5 against a limit of 9 is not rejected.
+const REAL_CHECK: &str = r#"test "$(sh src/billing/charge.sh 5 5 9)" = rejected"#;
+
 fn seed_prove(repo: &Repo) {
     repo.write("covenant.toml", PROVE_CONFIG);
     repo.write("src/billing/ledger.txt", "limit enforced\n");
+    repo.write("src/billing/charge.sh", CHARGE_SH);
     repo.commit("init");
 }
 
@@ -457,8 +466,10 @@ fn prove_hands_the_brief_to_the_agent_and_records_a_passing_check() {
     let repo = Repo::new("prove-ok");
     seed_prove(&repo);
     // Stand-in agent: keeps the brief, adds a test, and reports how to run it.
-    let agent = r#"cat > brief.txt; mkdir -p tests; echo 'grep -q enforced src/billing/ledger.txt' > tests/bill_1.sh; echo 'sh tests/bill_1.sh' > "$COVENANT_PROVE_OUT""#;
-    let out = repo.covenant(&["prove", "BILL-1", "--agent", agent]);
+    let agent = format!(
+        r#"cat > brief.txt; mkdir -p tests; echo '{REAL_CHECK}' > tests/bill_1.sh; echo 'sh tests/bill_1.sh' > "$COVENANT_PROVE_OUT""#
+    );
+    let out = repo.covenant(&["prove", "BILL-1", "--agent", &agent]);
     assert_eq!(out.status.code(), Some(0), "{}", stdout(&out));
 
     let brief = fs::read_to_string(repo.dir.join("brief.txt")).unwrap();
@@ -471,6 +482,15 @@ fn prove_hands_the_brief_to_the_agent_and_records_a_passing_check() {
         stdout(&out).contains("new     tests/bill_1.sh"),
         "{}",
         stdout(&out)
+    );
+    assert!(
+        stdout(&out).contains("caught 1 of 1 mutant"),
+        "{}",
+        stdout(&out)
+    );
+    assert_eq!(
+        fs::read_to_string(repo.dir.join("src/billing/charge.sh")).unwrap(),
+        CHARGE_SH
     );
     assert!(!repo.dir.join(".covenant-prove-BILL-1.check").exists());
     assert_eq!(repo.covenant(&["check", "--all"]).status.code(), Some(0));
@@ -500,7 +520,14 @@ fn prove_refuses_when_the_agent_edits_the_code_the_promise_protects() {
     assert_eq!(check_of(&repo), "false # TODO: drive random charges");
 
     repo.git(&["checkout", "--", "src/billing/ledger.txt"]);
-    let out = repo.covenant(&["prove", "BILL-1", "--agent", agent, "--allow-source-edits"]);
+    let out = repo.covenant(&[
+        "prove",
+        "BILL-1",
+        "--agent",
+        agent,
+        "--allow-source-edits",
+        "--no-mutate",
+    ]);
     assert_eq!(out.status.code(), Some(0), "{}", stdout(&out));
     assert_eq!(check_of(&repo), "true");
 }
@@ -529,6 +556,7 @@ fn prove_uses_the_agent_from_the_config_and_can_print_the_brief() {
         "covenant.toml",
         &format!("agent = \"cat > /dev/null; echo true > $COVENANT_PROVE_OUT\"\n{PROVE_CONFIG}"),
     );
+    repo.write("src/billing/charge.sh", CHARGE_SH);
     repo.commit("init");
 
     let out = repo.covenant(&["prove", "BILL-1", "--print-prompt"]);
@@ -536,7 +564,113 @@ fn prove_uses_the_agent_from_the_config_and_can_print_the_brief() {
     assert!(stdout(&out).contains("Promise BILL-1"));
     assert_eq!(check_of(&repo), "false # TODO: drive random charges");
 
-    let out = repo.covenant(&["prove", "BILL-1"]);
+    let out = repo.covenant(&["prove", "BILL-1", "--no-mutate"]);
     assert_eq!(out.status.code(), Some(0), "{}", stdout(&out));
     assert_eq!(check_of(&repo), "true");
+}
+
+#[test]
+fn prove_refuses_a_check_that_notices_no_mutant() {
+    let repo = Repo::new("prove-vacuous");
+    seed_prove(&repo);
+    // Passes, and would keep passing whatever happened to the code.
+    let agent = r#"cat > /dev/null; echo true > "$COVENANT_PROVE_OUT""#;
+    let out = repo.covenant(&["prove", "BILL-1", "--agent", agent]);
+    assert_eq!(out.status.code(), Some(1), "{}", stdout(&out));
+    assert!(stdout(&out).contains("MISSED"), "{}", stdout(&out));
+    assert!(stdout(&out).contains("caught 0 of 1 mutant"));
+    assert_eq!(check_of(&repo), "false # TODO: drive random charges");
+    assert_eq!(
+        fs::read_to_string(repo.dir.join("src/billing/charge.sh")).unwrap(),
+        CHARGE_SH
+    );
+}
+
+#[test]
+fn prove_stops_before_the_agent_when_there_is_nothing_to_mutate() {
+    let repo = Repo::new("prove-no-sites");
+    repo.write("covenant.toml", PROVE_CONFIG);
+    repo.write("src/billing/ledger.txt", "limit enforced\n");
+    repo.commit("init");
+    let out = repo.covenant(&["prove", "BILL-1", "--agent", "touch agent-ran"]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("nothing to mutate"));
+    assert!(!repo.dir.join("agent-ran").exists());
+}
+
+fn seed_mutate(repo: &Repo, check: &str, extra: &str) {
+    repo.write(
+        "covenant.toml",
+        &format!(
+            "{extra}\n[[promise]]\nid = \"BILL-1\"\nstatement = \"limit holds\"\npaths = [\"src/billing/**\"]\ncheck = '{check}'\n"
+        ),
+    );
+    repo.write("src/billing/charge.sh", CHARGE_SH);
+    repo.commit("init");
+}
+
+#[test]
+fn mutate_passes_a_check_that_catches_the_break_and_restores_the_file() {
+    let repo = Repo::new("mutate-caught");
+    seed_mutate(&repo, REAL_CHECK, "");
+    let out = repo.covenant(&["mutate", "BILL-1"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stdout(&out));
+    assert!(
+        stdout(&out).contains("CAUGHT   src/billing/charge.sh:1  `+` -> `-`"),
+        "{}",
+        stdout(&out)
+    );
+    assert_eq!(
+        fs::read_to_string(repo.dir.join("src/billing/charge.sh")).unwrap(),
+        CHARGE_SH
+    );
+    assert_eq!(repo.git(&["status", "--porcelain"]), "");
+}
+
+#[test]
+fn mutate_fails_a_check_that_catches_nothing() {
+    let repo = Repo::new("mutate-missed");
+    seed_mutate(&repo, "true", "");
+    let out = repo.covenant(&["mutate", "BILL-1"]);
+    assert_eq!(out.status.code(), Some(1), "{}", stdout(&out));
+    assert!(stdout(&out).contains("MISSED"));
+    assert!(stdout(&out).contains("caught 0 of 1 mutant"));
+}
+
+#[test]
+fn mutate_discards_mutants_that_do_not_build() {
+    let repo = Repo::new("mutate-build");
+    // The "build" rejects any change to the file, so the only mutant is invalid
+    // and the failing check must not be credited with catching it.
+    seed_mutate(
+        &repo,
+        REAL_CHECK,
+        "build = \"grep -q '$1 + $2' src/billing/charge.sh\"",
+    );
+    let out = repo.covenant(&["mutate", "BILL-1"]);
+    assert_eq!(out.status.code(), Some(1), "{}", stdout(&out));
+    assert!(stdout(&out).contains("INVALID"), "{}", stdout(&out));
+    assert!(stdout(&out).contains("caught 0 of 0 mutant"));
+    assert!(stdout(&out).contains("1 did not build"));
+}
+
+#[test]
+fn mutate_needs_a_passing_check_and_something_to_mutate() {
+    let repo = Repo::new("mutate-baseline");
+    seed_mutate(&repo, "false", "");
+    let out = repo.covenant(&["mutate", "BILL-1"]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("does not pass on the unmodified code"));
+
+    // Tests are not mutated: breaking a test proves nothing about the check.
+    let repo = Repo::new("mutate-tests-only");
+    repo.write(
+        "covenant.toml",
+        "[[promise]]\nid = \"T-1\"\nstatement = \"s\"\npaths = [\"**\"]\ncheck = \"true\"\n",
+    );
+    repo.write("tests/charge_test.sh", CHARGE_SH);
+    repo.commit("init");
+    let out = repo.covenant(&["mutate", "T-1"]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("nothing to mutate"));
 }
