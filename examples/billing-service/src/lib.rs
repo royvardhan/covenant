@@ -39,11 +39,10 @@ impl Ledger {
             return Ok(self.usage(org.id));
         }
         let current = self.usage(org.id);
-        let available = org.limit - current;
-        if amount > available {
+        if amount > org.limit {
             return Err(BillingError::OverLimit {
                 requested: amount,
-                available,
+                available: org.limit,
             });
         }
         self.seen.insert((org.id, key.to_string()));
