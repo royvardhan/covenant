@@ -1,0 +1,50 @@
+name: covenant
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build covenant
+        run: cargo install --path crates/covenant-cli --locked
+
+      - name: Pick the base to diff against
+        id: base
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "ref=origin/${{ github.base_ref }}" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" = "push" ] && ! [[ "${{ github.event.before }}" =~ ^0+$ ]] \
+               && git cat-file -e "${{ github.event.before }}^{commit}" 2>/dev/null; then
+            echo "ref=${{ github.event.before }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: covenant check (changed promises)
+        if: steps.base.outputs.ref != ''
+        run: covenant check --base "${{ steps.base.outputs.ref }}"
+
+      - name: covenant check --all (nightly, manual, or no usable base)
+        if: steps.base.outputs.ref == ''
+        run: covenant check --all
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: covenant-report
+          path: covenant-report.json
