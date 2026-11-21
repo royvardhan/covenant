@@ -66,7 +66,7 @@ fn is_trigger(file: &str) -> bool {
         .is_some_and(|n| TRIGGER_ALL.contains(&n))
 }
 
-fn glob_set(p: &Promise) -> Result<GlobSet, Error> {
+pub fn glob_set(p: &Promise) -> Result<GlobSet, Error> {
     let mut b = GlobSetBuilder::new();
     for g in &p.paths {
         let glob = GlobBuilder::new(g)

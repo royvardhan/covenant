@@ -35,8 +35,8 @@ impl Pack {
             message: e.message().to_string(),
         })?;
         Config {
-            timeout: None,
             promises: pack.promises.clone(),
+            ..Config::default()
         }
         .validate()?;
         Ok(pack)

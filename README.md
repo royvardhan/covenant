@@ -51,6 +51,9 @@ covenant check --all          # run every promise once
 covenant hook install         # every `git push` now runs the affected promises
 ```
 
+Or skip the editing and have an agent write each check:
+`covenant prove BILL-1 --agent '<your coding agent>'` (see below).
+
 That is it. From now on `git push` runs the promises whose `paths` overlap the
 pushed diff and blocks on any failure. Run `covenant check --all` on main and
 nightly; `.github/workflows/covenant.yml` in this repo does both.
@@ -73,6 +76,7 @@ to it, and checks run from its directory.
 
 ```toml
 timeout = 600                       # optional, seconds per check (default 600)
+agent = "claude -p --allowedTools Read Write Edit Glob Grep Bash"   # optional, used by `covenant prove`
 
 [[promise]]
 id = "BILL-1"
@@ -105,11 +109,43 @@ Each check sees `COVENANT_PROMISE_ID` in its environment.
 covenant check [--base <ref>] [--head <ref>] [--all] [--timeout <secs>] [--report <path>] [--quiet]
 covenant list
 covenant add <pack-name | path/to/pack.toml>
+covenant prove <id> [--agent <command>] [--print-prompt] [--allow-source-edits] [--timeout <secs>]
 covenant packs
 covenant hook install [--force] | uninstall
 ```
 
 Checks run against your working tree, so push the branch you have checked out.
+
+## Letting an agent write the check
+
+`covenant prove <id>` turns a promise's statement into a real check. It hands
+the promise to a coding agent you already use, then verifies what comes back:
+
+```sh
+covenant add billing                 # BILL-1..5 arrive with placeholder checks
+covenant prove BILL-1 --agent 'claude -p --allowedTools Read Write Edit Glob Grep Bash'
+```
+
+1. Covenant writes a brief (the statement, the why, the paths, the pack's hint)
+   and pipes it to the agent command's stdin. `--print-prompt` shows it.
+2. The agent reads the repo, writes a test in the repo's own framework, and
+   reports the command that runs it.
+3. Covenant lists every file the agent touched, runs the command, and only if
+   it passes writes it into `covenant.toml` as the promise's `check`.
+
+Covenant refuses the result if the agent edited existing files under the
+promise's `paths`, because a check must not pass by changing the code it
+guards; `--allow-source-edits` accepts such edits after you have read them.
+Nothing is committed. You review the test once and commit it yourself.
+
+The agent is any command that takes a prompt on stdin and can edit files and
+run tests in the working directory. Set it with `--agent`, `COVENANT_AGENT`, or
+`agent = "..."` at the top of `covenant.toml`. It also sees
+`COVENANT_PROMISE_ID` and `COVENANT_PROVE_OUT` in its environment.
+
+A check that passes once has not been shown to fail when the promise breaks.
+The brief asks the agent to try that, but Covenant does not verify it yet
+(see the roadmap).
 
 ## Pack format
 
@@ -155,7 +191,7 @@ Built-in packs ship inside the binary and are listed by `covenant packs`:
 
 ```
 crates/covenant-engine/   load promises, select by diff, run checks, write the report
-crates/covenant-cli/      covenant check | list | add | packs | hook
+crates/covenant-cli/      covenant check | list | add | packs | prove | hook
 packs/billing/            generic billing promises
 packs/solver/             intent / order-flow solver promises
 examples/billing-service/ tiny ledger with 3 wired promises; demo/over-limit-bug shows a BLOCK
@@ -164,10 +200,20 @@ covenant.toml             this repo's own promises, run by the hook and the Acti
 
 ## Roadmap
 
-- v0.2: dependency-graph selection (`cargo metadata` reverse deps), so a change
-  to a shared crate selects the promises of everything that depends on it
-- v0.3: seeded fault injection and replay
-- v0.4: an agent that reads a diff and proposes new promises
+The goal is a verification layer: you state what must stay true, and Covenant
+produces and enforces the proof. Today a human writes every check.
+
+- v0.2: statement to check. `covenant prove <id>` has an AI agent read the repo
+  and write the test that proves a promise; a human reviews it once. The first
+  version is in: one promise at a time, through an external agent command
+- v0.3: proof the check is real. Break the code on purpose (seeded fault
+  injection) and require the check to fail, so a generated check cannot pass
+  vacuously
+- v0.4: diff to promise. On each change the agent flags the promises it
+  endangers and proposes new ones, replacing hand-written `paths` globs
+  (dependency-graph selection lands here as the non-AI fallback)
+- v0.5: packs with real content. A pack ships the guidance needed to generate
+  working checks for a given stack, not `# TODO` templates
 
 ## License
 

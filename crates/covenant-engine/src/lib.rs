@@ -2,6 +2,7 @@ pub mod config;
 pub mod error;
 pub mod git;
 pub mod pack;
+pub mod prove;
 pub mod report;
 pub mod run;
 pub mod select;

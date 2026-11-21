@@ -428,3 +428,115 @@ check = "true"
         "{text}"
     );
 }
+
+const PROVE_CONFIG: &str = r#"
+[[promise]]
+id = "BILL-1"
+statement = "An org is never billed more than its limit"
+why = "Over-limit charges lose customers"
+paths = ["src/billing/**"]
+check = "false # TODO: drive random charges"
+"#;
+
+fn seed_prove(repo: &Repo) {
+    repo.write("covenant.toml", PROVE_CONFIG);
+    repo.write("src/billing/ledger.txt", "limit enforced\n");
+    repo.commit("init");
+}
+
+fn check_of(repo: &Repo) -> String {
+    let out = repo.covenant(&["list"]);
+    stdout(&out)
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("check: ").map(str::to_string))
+        .unwrap()
+}
+
+#[test]
+fn prove_hands_the_brief_to_the_agent_and_records_a_passing_check() {
+    let repo = Repo::new("prove-ok");
+    seed_prove(&repo);
+    // Stand-in agent: keeps the brief, adds a test, and reports how to run it.
+    let agent = r#"cat > brief.txt; mkdir -p tests; echo 'grep -q enforced src/billing/ledger.txt' > tests/bill_1.sh; echo 'sh tests/bill_1.sh' > "$COVENANT_PROVE_OUT""#;
+    let out = repo.covenant(&["prove", "BILL-1", "--agent", agent]);
+    assert_eq!(out.status.code(), Some(0), "{}", stdout(&out));
+
+    let brief = fs::read_to_string(repo.dir.join("brief.txt")).unwrap();
+    assert!(brief.contains("Promise BILL-1"));
+    assert!(brief.contains("An org is never billed more than its limit"));
+    assert!(brief.contains("drive random charges"));
+
+    assert_eq!(check_of(&repo), "sh tests/bill_1.sh");
+    assert!(
+        stdout(&out).contains("new     tests/bill_1.sh"),
+        "{}",
+        stdout(&out)
+    );
+    assert!(!repo.dir.join(".covenant-prove-BILL-1.check").exists());
+    assert_eq!(repo.covenant(&["check", "--all"]).status.code(), Some(0));
+}
+
+#[test]
+fn prove_keeps_the_old_check_when_the_new_one_fails() {
+    let repo = Repo::new("prove-fail");
+    seed_prove(&repo);
+    let agent = r#"cat > /dev/null; echo 'echo over limit; exit 1' > "$COVENANT_PROVE_OUT""#;
+    let out = repo.covenant(&["prove", "BILL-1", "--agent", agent]);
+    assert_eq!(out.status.code(), Some(1), "{}", stdout(&out));
+    assert!(stdout(&out).contains("BLOCK"));
+    assert!(stdout(&out).contains("over limit"));
+    assert_eq!(check_of(&repo), "false # TODO: drive random charges");
+}
+
+#[test]
+fn prove_refuses_when_the_agent_edits_the_code_the_promise_protects() {
+    let repo = Repo::new("prove-protected");
+    seed_prove(&repo);
+    let agent = r#"cat > /dev/null; echo weakened > src/billing/ledger.txt; echo true > "$COVENANT_PROVE_OUT""#;
+    let out = repo.covenant(&["prove", "BILL-1", "--agent", agent]);
+    assert_eq!(out.status.code(), Some(1), "{}", stdout(&out));
+    assert!(stdout(&out).contains("edited  src/billing/ledger.txt"));
+    assert!(stdout(&out).contains("--allow-source-edits"));
+    assert_eq!(check_of(&repo), "false # TODO: drive random charges");
+
+    repo.git(&["checkout", "--", "src/billing/ledger.txt"]);
+    let out = repo.covenant(&["prove", "BILL-1", "--agent", agent, "--allow-source-edits"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stdout(&out));
+    assert_eq!(check_of(&repo), "true");
+}
+
+#[test]
+fn prove_fails_when_the_agent_reports_no_check_or_fails_itself() {
+    let repo = Repo::new("prove-nothing");
+    seed_prove(&repo);
+    let out = repo.covenant(&["prove", "BILL-1", "--agent", "cat > /dev/null"]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("did not write a check command"));
+
+    let out = repo.covenant(&["prove", "BILL-1", "--agent", "cat > /dev/null; exit 3"]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("agent command failed"));
+
+    let out = repo.covenant(&["prove", "NOPE-1", "--agent", "true"]);
+    assert_eq!(out.status.code(), Some(2));
+    assert_eq!(check_of(&repo), "false # TODO: drive random charges");
+}
+
+#[test]
+fn prove_uses_the_agent_from_the_config_and_can_print_the_brief() {
+    let repo = Repo::new("prove-config");
+    repo.write(
+        "covenant.toml",
+        &format!("agent = \"cat > /dev/null; echo true > $COVENANT_PROVE_OUT\"\n{PROVE_CONFIG}"),
+    );
+    repo.commit("init");
+
+    let out = repo.covenant(&["prove", "BILL-1", "--print-prompt"]);
+    assert_eq!(out.status.code(), Some(0));
+    assert!(stdout(&out).contains("Promise BILL-1"));
+    assert_eq!(check_of(&repo), "false # TODO: drive random charges");
+
+    let out = repo.covenant(&["prove", "BILL-1"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stdout(&out));
+    assert_eq!(check_of(&repo), "true");
+}

@@ -1,6 +1,7 @@
 mod add;
 mod check;
 mod hook;
+mod prove;
 mod ui;
 
 use std::path::{Path, PathBuf};
@@ -45,6 +46,8 @@ enum Cmd {
     Add { pack: String },
     #[command(about = "List the built-in packs")]
     Packs,
+    #[command(about = "Have an AI agent write the check for a promise, then verify it")]
+    Prove(prove::Args),
 }
 
 fn main() -> ExitCode {
@@ -65,6 +68,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
         Cmd::Hook { cmd } => hook::run(&cli.config, cmd),
         Cmd::Add { pack } => add::run(&cli.config, &pack),
         Cmd::Packs => add::list(),
+        Cmd::Prove(args) => prove::run(&cli.config, args),
     }
 }
 

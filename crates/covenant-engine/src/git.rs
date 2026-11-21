@@ -44,6 +44,44 @@ pub fn default_base(dir: &Path) -> Option<String> {
     .map(str::to_string)
 }
 
+/// A file that differs from HEAD or is untracked, relative to `dir`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Dirty {
+    pub path: String,
+    /// True when the file exists in HEAD, i.e. this is an edit, not a new file.
+    pub existing: bool,
+}
+
+/// Every file under `dir` that differs from HEAD, staged or not, plus untracked
+/// files that are not ignored.
+pub fn dirty_files(dir: &Path) -> Result<Vec<Dirty>, Error> {
+    let out = git(
+        dir,
+        &[
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+            "--no-renames",
+            "--",
+            ".",
+        ],
+    )?;
+    let prefix = git(dir, &["rev-parse", "--show-prefix"])?;
+    let prefix = prefix.trim();
+    Ok(out
+        .split('\0')
+        .filter(|e| e.len() > 3)
+        .map(|e| {
+            let (status, path) = e.split_at(3);
+            Dirty {
+                path: path.strip_prefix(prefix).unwrap_or(path).to_string(),
+                existing: !(status.starts_with("??") || status.starts_with('A')),
+            }
+        })
+        .collect())
+}
+
 pub fn toplevel(dir: &Path) -> Result<String, Error> {
     git(dir, &["rev-parse", "--show-toplevel"]).map(|s| s.trim().to_string())
 }

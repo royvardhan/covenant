@@ -23,6 +23,9 @@ pub struct Promise {
 pub struct Config {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout: Option<u64>,
+    /// Command `covenant prove` hands a promise to; it reads the brief on stdin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
     #[serde(default, rename = "promise")]
     pub promises: Vec<Promise>,
 }
@@ -140,6 +143,7 @@ mod tests {
     fn round_trips_through_toml() {
         let c = Config {
             timeout: Some(30),
+            agent: Some("my-agent --run".into()),
             promises: vec![Promise {
                 id: "A-1".into(),
                 statement: "s".into(),
