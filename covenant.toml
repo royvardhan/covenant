@@ -1,0 +1,11 @@
+[[promise]]
+id = "COV-1"
+statement = "Selection runs exactly the promises whose paths match the changed files, and every promise when a lockfile changes"
+paths = ["crates/covenant-engine/**"]
+check = "cargo test -q -p covenant-engine"
+
+[[promise]]
+id = "COV-2"
+statement = "A check that exits non-zero or times out always produces a BLOCK and a non-zero exit from `covenant check`"
+paths = ["crates/**"]
+check = "cargo test -q -p covenant-cli"

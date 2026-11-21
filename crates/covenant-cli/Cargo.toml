@@ -1,0 +1,16 @@
+[package]
+name = "covenant-cli"
+description = "Run promise checks on every push and block the push if any promise breaks"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "covenant"
+path = "src/main.rs"
+
+[dependencies]
+covenant-engine = { path = "../covenant-engine", version = "0.1.0" }
+clap.workspace = true
+anyhow.workspace = true
